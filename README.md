@@ -17,3 +17,8 @@ Have fun :)
 * Increase Catch Size
 * Visualize Catch Zone
 * Field Of View
+
+# Script
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Blastbrean/Sigma-FF2/refs/heads/main/ff2_hider.lua"))()
+```
