@@ -45,10 +45,12 @@ local sigma = {
 	["jump_power"] = false,
 	["jump_power_amount"] = 50 * 1.1,
 	["boost_on_height"] = true,
+	["angle_tolerance"] = 10,
 	["boost_amount"] = 1.15,
 	["increase_catch_size"] = Vector3.new(10, 10, 10),
 	["visualize_catch_zone"] = true,
 	["reduce_catch_tackle"] = true,
+	["silent_mode"] = false,
 }
 
 if not environment.sigma then
@@ -59,10 +61,12 @@ local MIN_CPU_OFFSET = 100
 local MAX_CPU_OFFSET = 9999
 local DEFAULT_CPU_OFFSET = 3600
 
+math.randomseed((os.clock() + os.time()) * 1000)
+
 ---@todo: automatically reset cpu_offset when the user is banned.
 ---@todo: store cpu history so we don't use another offset multiple times.
 if not isfile("cpu_offset.txt") then
-	writefile("cpu_offset.txt", math.random(MIN_CPU_OFFSET, MAX_CPU_OFFSET))
+	writefile("cpu_offset.txt", tostring(math.random(MIN_CPU_OFFSET, MAX_CPU_OFFSET)))
 end
 
 local success, cpu_offset = pcall(readfile, "cpu_offset.txt")
@@ -125,6 +129,9 @@ end)
 if not cached_namecall_function then
 	return warn("[ff2_hider] failed to cache namecall function")
 end
+
+-- library reference for notifications, may be nil.
+local Library = nil
 
 -- hide *some* changes made by us - let the game not see our changes.
 local reflection_map = {}
@@ -287,6 +294,7 @@ local patch_log_service_return = LPH_NO_VIRTUALIZE(function(log_service_ret)
 			and not log_message:find("Valyse[,:]")
 			and not log_message:find('%[string "')
 			and not log_message:find(":loadstring[,:]")
+			and not log_message:find(".Xeno.")
 
 		if log_entry_ok then
 			table.insert(new_log_service_ret, log_service_entry)
@@ -369,6 +377,21 @@ local on_game_namecall = LPH_NO_VIRTUALIZE(function(...)
 		and typeof(args[2]) == "string"
 	then
 		return log_warn("on_game_namecall(...) -> method[%s] -> stop bind: %s", method, args[2])
+	end
+
+	---@detection_vector: I'm lazy and don't check self.
+	if method == "Kick" and typeof(args[3]) == "string" and any_anticheat_caller() then
+		return log_warn("on_game_namecall(...) -> method[%s] -> stop kick: %s because %s", method, tostring(args[1]), tostring(args[3]))
+	end
+
+	if
+		orig_is_a(self, "RemoteEvent")
+		and (method == "fireServer" or method == "FireServer")
+		and typeof(args[2]) == "string"
+		and typeof(args[3]) == "string"
+		and args[2]:match("AC")
+	then
+		return log_warn("on_game_namecall(...) -> method[%s] -> anticheat string call: %s", method, args[3])
 	end
 
 	if
@@ -479,12 +502,38 @@ local on_game_newindex = LPH_NO_VIRTUALIZE(function(...)
 		if sigma.jump_power and sigma.jump_power_amount > 50 then
 			log_warn("on_game_newindex(...) -> force-denied velocity change: %s", tostring(new_value))
 		elseif (sigma.jump_power and sigma.jump_power_amount <= 50) or sigma.boost_on_height then
-			args[3] = self[index] * sigma.boost_amount or 1.1
-			log_warn(
-				"on_game_newindex(...) -> negated change & boosted old velocity: %s -> %s",
-				tostring(new_value),
-				tostring(args[3])
-			)
+			local angular_velocity = self["AssemblyAngularVelocity"]
+
+			log_warn("on_game_newindex(...) -> angular velocity: %s", tostring(angular_velocity))
+
+			if math.abs(angular_velocity.Y) >= (sigma.angle_tolerance or 10) then
+				args[3] = self[index] * (sigma.boost_on_height and (sigma.boost_amount or 1.1) or 1.0)
+
+				log_warn(
+					"on_game_newindex(...) -> negated change & boosted old velocity: %s -> %s",
+					tostring(new_value),
+					tostring(args[3])
+				)
+
+				local sound = Instance.new("Sound", self)
+				sound.SoundId = "rbxassetid://1053296915"
+				sound.Volume = sigma["silent_mode"] and 0.0 or 1.0
+				sound.PlayOnRemove = true
+				sound:Destroy()
+			elseif Library and not sigma["silent_mode"] then
+				---@note: Create a new thread with a higher identity. Else, we won't have enough permissions.
+				task.spawn(function()
+					setthreadidentity(7)
+
+					Library:Notify({
+						Title = "Denied Boost",
+						Content = "Your angular velocity on the Y-axis is too low to boost.",
+						SubContent = "Angular Y-axis velocity: " .. math.abs(angular_velocity.Y),
+						Duration = 3,
+					})
+				end)
+			end
+
 			orig_game_newindex(unpack(args))
 		else
 			log_warn("on_game_newindex(...) -> allowed velocity change: %s", tostring(new_value))
@@ -745,7 +794,15 @@ local on_catch_touch = LPH_NO_VIRTUALIZE(function(toucher, touching, state)
 
 	if getexecutorname():match("Wave") then
 		log_warn(
-			"on_catch_touch(...) -> method['0'] -> succesfully replicated touch state %s to server.",
+			"on_catch_touch(...) -> method[0] -> succesfully replicated touch state %s to server.",
+			tostring(state)
+		)
+		return firetouchinterest(toucher, touching, state)
+	end
+
+	if getexecutorname():match("AWP") then
+		log_warn(
+			"on_catch_touch(...) -> method[0.1] -> succesfully replicated touch state %s to server.",
 			tostring(state)
 		)
 		return firetouchinterest(toucher, touching, state)
@@ -952,6 +1009,12 @@ local on_debug_info = LPH_NO_VIRTUALIZE(function(...)
 	local info_ret = orig_debug_info(...)
 	local checking_function = args[1] == 2 and args[2] == "f"
 
+	---@note: properly check caller later & properly return value...
+	if args[1] == 2 and args[2] == "s" then
+		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(info_ret))
+		return "LocalScript"
+	end
+
 	if not checking_function and not any_anticheat_caller() then
 		return info_ret
 	end
@@ -1024,6 +1087,38 @@ orig_catch = hookfunction(
 
 log_warn("loaded gta 5 cheat codes successfully")
 
+local matching_tables = LPH_NO_VIRTUALIZE(function(one, second)
+	if typeof(one) ~= "table" or typeof(second) ~= "table" then
+		return false
+	end
+
+	if #one ~= #second then
+		return false
+	end
+
+	for idx, value in next, one do
+		if not second[idx] then
+			return false
+		end
+
+		if value ~= second[idx] then
+			return false
+		end
+	end
+
+	for idx, value in next, second do
+		if not one[idx] then
+			return false
+		end
+
+		if value ~= one[idx] then
+			return false
+		end
+	end
+
+	return true
+end)
+
 local place_failsafe_func = LPH_NO_VIRTUALIZE(function()
 	for _, value in next, getgc(true) do
 		if typeof(value) ~= "table" then
@@ -1045,11 +1140,30 @@ local place_failsafe_func = LPH_NO_VIRTUALIZE(function()
 		local old = nil
 		old = hookfunction(metatable.__call, function(...)
 			local arguments = { ... }
+			local sanitized_arguments = {}
 
-			-- On detection.
-			local function on_detection(code)
-				warn(string.format("[%i] metatable.__call -> attempted to detect us", code))
+			for _, argument in next, arguments do
+				if typeof(argument) == "userdata" or typeof(argument) == "table" then
+					continue
+				end
 
+				table.insert(sanitized_arguments, argument)
+			end
+
+			if
+				not matching_tables(sanitized_arguments, { 655, 775, 724, 633, 891 })
+				and not matching_tables(sanitized_arguments, { 760, 760, 771, 665, 898 })
+				and not matching_tables(sanitized_arguments, { 660, 759, 751, 863, 771 })
+			then
+				-- Log arguments.
+				warn(
+					string.format(
+						"[%s] metatable.__call -> attempted to detect us",
+						table.concat(sanitized_arguments, ", ")
+					)
+				)
+
+				-- Log stack.
 				for idx, val in next, debug.getstack(3) do
 					if typeof(val) == "userdata" or typeof(val) == "table" then
 						continue
@@ -1057,19 +1171,18 @@ local place_failsafe_func = LPH_NO_VIRTUALIZE(function()
 
 					warn(string.format("[%s] stack -> %s", tostring(idx), tostring(val)))
 				end
+
+				-- Return.
+				return
 			end
 
-			-- Check one.
-			if arguments[2] == 760 and arguments[3] == 759 then
-				return on_detection(1)
+			local old_return_arguments = table.pack(old(...))
+
+			if typeof(old_return_arguments[1]) ~= "table" then
+				return error(string.format("old_return_argument table mismatch -> %s", tostring(old_return_arguments[1])))
 			end
 
-			-- Check two.
-			if arguments[2] == 798 and arguments[3] == 711 then
-				return on_detection(2)
-			end
-
-			return old(...)
+			return table.unpack(old_return_arguments)
 		end)
 	end
 end)
@@ -1081,7 +1194,7 @@ log_warn("placed failsafe")
 ---! Boring library - actual cheat part stuff.
 -- snake_case -> PascalCase transition here, who cares.
 
-local Library = loadstring(
+Library = loadstring(
 	game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau", true)
 )()
 
@@ -1164,6 +1277,18 @@ GameTab:CreateToggle("BoostOnHeight", {
 	end,
 })
 
+GameTab:CreateSlider("AngleTolerance", {
+	Title = "Angle Tolerance",
+	Description = "How much do you need to angle for a boost?",
+	Default = 10,
+	Min = 1,
+	Max = 30,
+	Rounding = 1,
+	Callback = function(Value)
+		sigma["angle_tolerance"] = Value
+	end,
+})
+
 GameTab:CreateSlider("BoostAmount", {
 	Title = "Boost Amount",
 	Description = "How much do you want to boost?",
@@ -1185,7 +1310,7 @@ GameTab:CreateInput("FPSCap", {
 	Numeric = true,
 	Finished = true,
 	Callback = function(Value)
-		setfpscap(Value)
+		setfpscap(tonumber(Value))
 	end,
 })
 
@@ -1273,6 +1398,17 @@ local SettingsTab = Window:CreateTab({
 	Title = "Settings",
 	Icon = "settings",
 })
+
+SettingsTab:CreateToggle("SilentMode", {
+	Title = "Silent Mode",
+	Enabled = false,
+	Callback = function(Value)
+		sigma["silent_mode"] = Value
+	end,
+})
+
+-- Minimize window.
+Window:Minimize()
 
 -- Interface manager.
 InterfaceManager:SetLibrary(Library)
