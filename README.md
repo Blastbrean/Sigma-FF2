@@ -5,7 +5,7 @@ The codebase is one-file, incomplete, very messy, and pretty rushed. It isn't an
 
 Only exploits with `hookfunction`, `hookmetamethod`, and `firetouchinterest` can use this script. 
 
-I don't support any bad exploits which might crash and it was tested on AWP + Wave.
+I didn't test any unknown exploits which might crash, have unintended behavior, or break. It has been tested on AWP + Wave.
 
 Have fun :)
 
