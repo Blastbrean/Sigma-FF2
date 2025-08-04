@@ -1119,78 +1119,6 @@ local matching_tables = LPH_NO_VIRTUALIZE(function(one, second)
 	return true
 end)
 
-local place_failsafe_func = LPH_NO_VIRTUALIZE(function()
-	for _, value in next, getgc(true) do
-		if typeof(value) ~= "table" then
-			continue
-		end
-
-		local metatable = getrawmetatable(value)
-		if not metatable or not metatable.__call then
-			continue
-		end
-
-		-- Remove __tostring metamethod to prevent detection.
-		metatable.__tostring = nil
-
-		-- Log hook.
-		log_warn("hooked metatable[%s].__call", tostring(metatable))
-
-		-- Place hook to sniff out and thwart any attempts to detect us. No upvalues.
-		local old = nil
-		old = hookfunction(metatable.__call, function(...)
-			local arguments = { ... }
-			local sanitized_arguments = {}
-
-			for _, argument in next, arguments do
-				if typeof(argument) == "userdata" or typeof(argument) == "table" then
-					continue
-				end
-
-				table.insert(sanitized_arguments, argument)
-			end
-
-			if
-				not matching_tables(sanitized_arguments, { 655, 775, 724, 633, 891 })
-				and not matching_tables(sanitized_arguments, { 760, 760, 771, 665, 898 })
-				and not matching_tables(sanitized_arguments, { 660, 759, 751, 863, 771 })
-			then
-				-- Log arguments.
-				warn(
-					string.format(
-						"[%s] metatable.__call -> attempted to detect us",
-						table.concat(sanitized_arguments, ", ")
-					)
-				)
-
-				-- Log stack.
-				for idx, val in next, debug.getstack(3) do
-					if typeof(val) == "userdata" or typeof(val) == "table" then
-						continue
-					end
-
-					warn(string.format("[%s] stack -> %s", tostring(idx), tostring(val)))
-				end
-
-				-- Return.
-				return
-			end
-
-			local old_return_arguments = table.pack(old(...))
-
-			if typeof(old_return_arguments[1]) ~= "table" then
-				return error(string.format("old_return_argument table mismatch -> %s", tostring(old_return_arguments[1])))
-			end
-
-			return table.unpack(old_return_arguments)
-		end)
-	end
-end)
-
-place_failsafe_func()
-
-log_warn("placed failsafe")
-
 ---! Boring library - actual cheat part stuff.
 -- snake_case -> PascalCase transition here, who cares.
 
@@ -1428,3 +1356,4 @@ Window:SelectTab(1)
 
 -- Loaded library.
 log_warn("loaded library successfully")
+
