@@ -381,7 +381,12 @@ local on_game_namecall = LPH_NO_VIRTUALIZE(function(...)
 
 	---@detection_vector: I'm lazy and don't check self.
 	if method == "Kick" and typeof(args[3]) == "string" and any_anticheat_caller() then
-		return log_warn("on_game_namecall(...) -> method[%s] -> stop kick: %s because %s", method, tostring(args[1]), tostring(args[3]))
+		return log_warn(
+			"on_game_namecall(...) -> method[%s] -> stop kick: %s because %s",
+			method,
+			tostring(args[1]),
+			tostring(args[3])
+		)
 	end
 
 	if
@@ -808,6 +813,14 @@ local on_catch_touch = LPH_NO_VIRTUALIZE(function(toucher, touching, state)
 		return firetouchinterest(toucher, touching, state)
 	end
 
+	if getexecutorname():match("Bunni") then
+		log_warn(
+			"on_catch_touch(...) -> method[0.2] -> succesfully replicated touch state %s to server.",
+			tostring(state)
+		)
+		return firetouchinterest(toucher, touching, state)
+	end
+
 	local replicate_success, _ = pcall(firetouchinterest, toucher, transmitter, state)
 
 	if replicate_success then
@@ -1006,22 +1019,22 @@ end)
 
 local on_debug_info = LPH_NO_VIRTUALIZE(function(...)
 	local args = { ... }
-	local info_ret = orig_debug_info(...)
+	local info_ret = table.pack(orig_debug_info(...))
 	local checking_function = args[1] == 2 and args[2] == "f"
 
 	---@note: properly check caller later & properly return value...
-	if args[1] == 2 and args[2] == "s" then
-		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(info_ret))
-		return "LocalScript"
+	if args[1] == 2 and args[2] == "sn" then
+		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(table.concat(info_ret, ",")))
+		return "LocalScript", nil
 	end
 
 	if not checking_function and not any_anticheat_caller() then
-		return info_ret
+		return table.unpack(info_ret)
 	end
 
 	log_warn(
 		"on_debug_info(...) -> info_ret[%s] -> cached_namecall_function[%s]",
-		tostring(info_ret),
+		tostring(table.concat(info_ret, ",")),
 		tostring(cached_namecall_function)
 	)
 
@@ -1356,4 +1369,3 @@ Window:SelectTab(1)
 
 -- Loaded library.
 log_warn("loaded library successfully")
-
