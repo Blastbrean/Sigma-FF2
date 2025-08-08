@@ -228,20 +228,6 @@ local function patch_is_a_ret(args, is_a_ret)
 	return is_a_ret
 end
 
-local function anticheat_caller(caller_script_info)
-	local const_success, consts = pcall(debug.getconstants, caller_script_info.func)
-	if not const_success or not consts then
-		return false
-	end
-
-	local first_const = consts[1]
-	if typeof(first_const) ~= "string" then
-		return false
-	end
-
-	return first_const:match("_______________________________")
-end
-
 local any_anticheat_caller = LPH_NO_VIRTUALIZE(function()
 	for idx = 1, math.huge do
 		if not debug.isvalidlevel(idx) then
@@ -253,12 +239,24 @@ local any_anticheat_caller = LPH_NO_VIRTUALIZE(function()
 			break
 		end
 
-		if not anticheat_caller(caller_script_info) then
+		local short_src = caller_script_info.short_src
+
+		if typeof(short_src) ~= "string" then
+			continue
+		end
+
+		if
+			not short_src:match("LocaIScript")
+			or not short_src:match("PlayerScriptsLoader")
+			or not short_src:match("PlayerModule")
+		then
 			continue
 		end
 
 		return true
 	end
+
+	return false
 end)
 
 local on_os_clock = LPH_NO_VIRTUALIZE(function(...)
@@ -295,6 +293,7 @@ local patch_log_service_return = LPH_NO_VIRTUALIZE(function(log_service_ret)
 			and not log_message:find('%[string "')
 			and not log_message:find(":loadstring[,:]")
 			and not log_message:find(".Xeno.")
+			and not log_message == "Stack End"
 
 		if log_entry_ok then
 			table.insert(new_log_service_ret, log_service_entry)
@@ -1024,7 +1023,7 @@ local on_debug_info = LPH_NO_VIRTUALIZE(function(...)
 
 	---@note: properly check caller later & properly return value...
 	if args[1] == 2 and args[2] == "sn" then
-		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(table.concat(info_ret, ",")))
+		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(info_ret, ","))
 		return "LocalScript", nil
 	end
 
@@ -1034,7 +1033,7 @@ local on_debug_info = LPH_NO_VIRTUALIZE(function(...)
 
 	log_warn(
 		"on_debug_info(...) -> info_ret[%s] -> cached_namecall_function[%s]",
-		tostring(table.concat(info_ret, ",")),
+		tostring(info_ret),
 		tostring(cached_namecall_function)
 	)
 
@@ -1049,6 +1048,31 @@ for _, connection in next, getconnections(script_context.Error) do
 	else
 		log_warn("getconnections(script_context.Error) -> next -> failed: disable_result[%s]", tostring(disable_result))
 	end
+end
+
+-- prevent stupid crash
+for _, value in next, getgc() do
+	if typeof(value) ~= "function" then
+		continue
+	end
+
+	if iscclosure(value) then
+		continue
+	end
+
+	local consts_success, consts_result = pcall(debug.getconstants, value)
+	if not consts_success or not consts_result or #consts_result ~= 1 then
+		continue
+	end
+
+	local _, first_const = next(consts_result)
+	if first_const ~= 4000002 then
+		continue
+	end
+
+	log_warn("getgc() -> hooked freeze function: function[%s]", tostring(value))
+
+	hookfunction(value, function(...) end)
 end
 
 orig_debug_info = hookfunction(debug.info, newcclosure(on_debug_info))
