@@ -393,9 +393,9 @@ local on_game_namecall = LPH_NO_VIRTUALIZE(function(...)
 		and (method == "fireServer" or method == "FireServer")
 		and typeof(args[2]) == "string"
 		and typeof(args[3]) == "string"
-		and args[2]:match("AC")
+		and args[3]:match("error")
 	then
-		return log_warn("on_game_namecall(...) -> method[%s] -> anticheat string call: %s", method, args[3])
+		return log_warn("on_game_namecall(...) -> method[%s] -> anticheat error call: '%s'", method, args[3])
 	end
 
 	if
