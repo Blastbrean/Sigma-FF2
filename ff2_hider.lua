@@ -12,7 +12,9 @@ if not hookfunction or not hookmetamethod or not firetouchinterest then
 end
 
 if not LPH_OBFUSCATED then
-	loadstring("LPH_NO_VIRTUALIZE = function(...) return ... end")()
+	getfenv().LPH_NO_VIRTUALIZE = function(...)
+		return ...
+	end
 end
 
 local environment = getgenv()
@@ -56,33 +58,6 @@ local sigma = {
 if not environment.sigma then
 	environment.sigma = sigma
 end
-
-local MIN_CPU_OFFSET = 100
-local MAX_CPU_OFFSET = 9999
-local DEFAULT_CPU_OFFSET = 3600
-
-math.randomseed((os.clock() + os.time()) * 1000)
-
----@todo: automatically reset cpu_offset when the user is banned.
----@todo: store cpu history so we don't use another offset multiple times.
-if not isfile("cpu_offset.txt") then
-	writefile("cpu_offset.txt", tostring(math.random(MIN_CPU_OFFSET, MAX_CPU_OFFSET)))
-end
-
-local success, cpu_offset = pcall(readfile, "cpu_offset.txt")
-
-if not success then
-	cpu_offset = DEFAULT_CPU_OFFSET
-end
-
-cpu_offset = tonumber(cpu_offset)
-
-if not cpu_offset then
-	cpu_offset = DEFAULT_CPU_OFFSET
-end
-
-cpu_offset = math.round(cpu_offset)
-cpu_offset = math.clamp(cpu_offset, MIN_CPU_OFFSET, MAX_CPU_OFFSET)
 
 local content_provider = game:GetService("ContentProvider")
 local log_service = game:GetService("LogService")
@@ -143,7 +118,6 @@ local football_parts_data = {}
 local is_catching = false
 
 local orig_debug_info = nil
-local orig_os_clock = nil
 local orig_is_a = nil
 local orig_get_property_changed_signal = nil
 local orig_preload_async = nil
@@ -239,6 +213,10 @@ local any_anticheat_caller = LPH_NO_VIRTUALIZE(function()
 			break
 		end
 
+		if isexecutorclosure(caller_script_info.func) then
+			continue
+		end
+
 		local short_src = caller_script_info.short_src
 
 		if typeof(short_src) ~= "string" then
@@ -246,9 +224,8 @@ local any_anticheat_caller = LPH_NO_VIRTUALIZE(function()
 		end
 
 		if
-			not short_src:match("LocaIScript")
-			or not short_src:match("PlayerScriptsLoader")
-			or not short_src:match("PlayerModule")
+			not short_src:match("ClientMain")
+			or (not short_src:match("ReplicatedFirst") and not short_src:match("PlayerModule"))
 		then
 			continue
 		end
@@ -257,18 +234,6 @@ local any_anticheat_caller = LPH_NO_VIRTUALIZE(function()
 	end
 
 	return false
-end)
-
-local on_os_clock = LPH_NO_VIRTUALIZE(function(...)
-	local os_clock_ret = orig_os_clock(...)
-
-	if checkcaller() then
-		return os_clock_ret
-	end
-
-	log_warn("on_os_clock(...) -> orig_cpu_time[%f] + cpu_offset[%f]", os_clock_ret, cpu_offset)
-
-	return os_clock_ret + cpu_offset
 end)
 
 local patch_log_service_return = LPH_NO_VIRTUALIZE(function(log_service_ret)
@@ -281,19 +246,19 @@ local patch_log_service_return = LPH_NO_VIRTUALIZE(function(log_service_ret)
 
 	for _, log_service_entry in next, log_service_ret do
 		local log_message = log_service_entry.message
-
 		if not log_message then
 			continue
 		end
 
-		local log_entry_ok = not log_message:find("Script ''", 2, true)
-			and not log_message:find("\n, line", 1, true)
-			and not log_message:find("Electron[,:]")
-			and not log_message:find("Valyse[,:]")
-			and not log_message:find('%[string "')
-			and not log_message:find(":loadstring[,:]")
-			and not log_message:find(".Xeno.")
-			and not log_message == "Stack End"
+		local has_script = log_message:find("Script ''", 2, true)
+		local has_line_info = log_message:find("\n, line ", 1, true)
+		local has_string_info = log_message:find('[string "', 1, true)
+		local has_block_part = log_message:find("BlockPart")
+		local log_entry_ok = false
+
+		if not (has_script or has_line_info or has_string_info or has_block_part) then
+			log_entry_ok = true
+		end
 
 		if log_entry_ok then
 			table.insert(new_log_service_ret, log_service_entry)
@@ -620,7 +585,7 @@ local on_get_property_changed_signal = LPH_NO_VIRTUALIZE(function(...)
 	end
 
 	local is_catch_part = self.Name:sub(1, 5) == "Catch"
-	local is_block_part = self.Name:sub(1, 6) == "BlockP"
+	local is_block_part = self.Name:sub(1, 5) == "BlokP"
 
 	if (self.Name == "Football" or is_catch_part or is_block_part) and orig_is_a(self, "BasePart") then
 		log_warn(
@@ -698,10 +663,6 @@ local on_game_index = LPH_NO_VIRTUALIZE(function(...)
 
 	local should_spoof_ret = false
 
-	if orig_is_a(self, "Camera") and (stripped_index == "FieldOfView" or stripped_index == "fieldOfView") then
-		should_spoof_ret = true
-	end
-
 	if orig_is_a(self, "Workspace") and (stripped_index == "Gravity" or stripped_index == "gravity") then
 		should_spoof_ret = true
 	end
@@ -715,6 +676,10 @@ local on_game_index = LPH_NO_VIRTUALIZE(function(...)
 			or stripped_index == "canCollide"
 		)
 	then
+		should_spoof_ret = true
+	end
+
+	if orig_is_a(self, "Camera") and (stripped_index == "FieldOfView" or stripped_index == "fieldOfView") then
 		should_spoof_ret = true
 	end
 
@@ -746,6 +711,14 @@ local on_game_index = LPH_NO_VIRTUALIZE(function(...)
 		end
 
 		-- sanity checks - cap default index so we don't get banned from the game lol.
+		if stripped_index == "FieldOfView" or stripped_index == "fieldOfView" then
+			default_index = math.min(default_index, 70.0)
+		end
+
+		if stripped_index == "Gravity" or stripped_index == "gravity" then
+			default_index = math.min(default_index, 196.0)
+		end
+
 		if stripped_index == "WalkSpeed" or stripped_index == "walkSpeed" then
 			default_index = math.min(default_index, default_walkspeed)
 		end
@@ -769,7 +742,7 @@ local on_game_index = LPH_NO_VIRTUALIZE(function(...)
 				)
 			end
 
-			if name == "BlockPart" then
+			if name:sub(1, 5) == "BlokP" then
 				default_index = Vector3.new(
 					math.min(default_index.X, 0.75),
 					math.min(default_index.Y, 5),
@@ -777,6 +750,8 @@ local on_game_index = LPH_NO_VIRTUALIZE(function(...)
 				)
 			end
 		end
+
+		-- warn(stripped_index, name, default_index)
 
 		return default_index
 	end
@@ -1021,14 +996,13 @@ local on_debug_info = LPH_NO_VIRTUALIZE(function(...)
 	local info_ret = table.pack(orig_debug_info(...))
 	local checking_function = args[1] == 2 and args[2] == "f"
 
-	---@note: properly check caller later & properly return value...
 	if args[1] == 2 and args[2] == "sn" then
-		log_warn("on_debug_info(...) -> info_ret['%s'] -> caller check spoofed", tostring(info_ret, ","))
-		return "LocalScript", nil
+		local fake_ret = table.pack(orig_debug_info(3, "sn"))
+		return table.unpack(fake_ret)
 	end
 
-	if not checking_function and not any_anticheat_caller() then
-		return table.unpack(info_ret)
+	if not checking_function then
+		return orig_debug_info(...)
 	end
 
 	log_warn(
@@ -1066,17 +1040,28 @@ for _, value in next, getgc() do
 	end
 
 	local _, first_const = next(consts_result)
-	if first_const ~= 4000002 then
+	if first_const ~= 4000001 then
 		continue
 	end
 
 	log_warn("getgc() -> hooked freeze function: function[%s]", tostring(value))
 
-	hookfunction(value, function(...) end)
+	hookfunction(value, function(...)
+		if shared.marked then
+			return
+		end
+
+		if not shared.marked then
+			shared.marked = true
+		end
+
+		warn("[ff2_hider] prevented freeze")
+
+		return true
+	end)
 end
 
 orig_debug_info = hookfunction(debug.info, newcclosure(on_debug_info))
-orig_os_clock = hookfunction(os.clock, newcclosure(on_os_clock))
 orig_is_a = hookfunction(is_a, newcclosure(on_is_a))
 orig_get_property_changed_signal =
 	hookfunction(game.GetPropertyChangedSignal, newcclosure(on_get_property_changed_signal))
@@ -1123,38 +1108,6 @@ orig_catch = hookfunction(
 )
 
 log_warn("loaded gta 5 cheat codes successfully")
-
-local matching_tables = LPH_NO_VIRTUALIZE(function(one, second)
-	if typeof(one) ~= "table" or typeof(second) ~= "table" then
-		return false
-	end
-
-	if #one ~= #second then
-		return false
-	end
-
-	for idx, value in next, one do
-		if not second[idx] then
-			return false
-		end
-
-		if value ~= second[idx] then
-			return false
-		end
-	end
-
-	for idx, value in next, second do
-		if not one[idx] then
-			return false
-		end
-
-		if value ~= one[idx] then
-			return false
-		end
-	end
-
-	return true
-end)
 
 ---! Boring library - actual cheat part stuff.
 -- snake_case -> PascalCase transition here, who cares.
